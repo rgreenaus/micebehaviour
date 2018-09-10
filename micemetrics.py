@@ -55,14 +55,17 @@ def main():
 
     # video filepaths
     root_dir = "videos/"
+    mask_dir = "masks/"
     filenames = ["CM 193F Day3 T6.mpg"] # "CM 192F Day3 T4.mpg",
     ref_frame_nums = [510]  # 834, # a frame from the video that all other frames can be compared to
-    # todo move to 4 mask files for non-rectangular quadrants
-    masks = ["mask.png", "mask.png"]  # filenames of the mask files
-    section_names = ["TL", "TR", "BL", "BR"]
     threshold = 100
-
-    # todo load a manual file marking the start+end of testing
+    mask_fn = "mask.png"  # filenames of the mask files
+    # 4 mask files for non-rectangular quadrants
+    mask_names = ["top", "right", "bottom", "left"]
+    section_mask_fns = ["mask top.png", "mask right.png", "mask bottom.png", "mask left.png"]
+    masks = {}
+    for fn in range(len(section_mask_fns)):
+        masks[mask_names[fn]] = np.array(imageio.imread(mask_dir + section_mask_fns[fn]))
 
     # loop through each video
     for file_num in range(len(filenames)):
@@ -92,77 +95,99 @@ def main():
 
         cap.release()
 
-        cy = int(frame_width/2)  # center x coord
-        cx = int(frame_height/2)  # centre y coord
+        # load the start and end times
+        txt_fn = root_dir + filenames[file_num]
+        txt_fn = txt_fn[:-3] + 'txt'
+        txt_h = open(txt_fn, "r")
+        txt = txt_h.readline()
+        txt_h.close()
+        txt = txt.split(',')
+        start_t = int(txt[0].rstrip())
+        end_t = int(txt[1].rstrip())
+        start_f = start_t * fps
+        end_f = end_t * fps
 
         # convert the uint8 data to True/False
-        mask = np.array(imageio.imread(root_dir + masks[file_num])) == 255
+        mask = np.array(imageio.imread(mask_dir + mask_fn)) == 255
 
         printnow("done.")
 
-        # Do the processing
-        printnow("\tDetermining difference regions... ", end='')
-        # build the reference frame
-        ref_frame = video[ref_frame_nums[file_num]]
-        ref_frame[mask == False] = 0  # set all the surrounding to zero
-        ref_frame[ref_frame > threshold] = 255  # set all pixels above the threshold to white
-        ref_frame[ref_frame <= threshold] = 0  # set all pixels below the threshold to black
-        # plt.imsave("debug/ref_frame.png", ref_frame) # save for reference
-        ref_frame_portions = get_portions(ref_frame, cx, cy)  # divide into portions
+        # # Do the processing
+        # printnow("\tDetermining difference regions... ", end='')
+        # # build the reference frame
+        # ref_frame = video[ref_frame_nums[file_num]]
+        # ref_frame[mask == False] = 0  # set all the surrounding to zero
+        # ref_frame[ref_frame > threshold] = 255  # set all pixels above the threshold to white
+        # ref_frame[ref_frame <= threshold] = 0  # set all pixels below the threshold to black
+        # # plt.imsave("debug/ref_frame.png", ref_frame) # save for reference
+        # ref_frame_portions = get_portions(ref_frame, cx, cy)  # divide into portions
 
-        most_movement = {}  # is a dict to hold entries in the frame_num:most_moved_quadrant format
+        quad_results = {}  # is a dict to hold entries in the frame_num:most_moved_quadrant format
 
         # threshold the video
         video[video > threshold] = 255
         video[video <= threshold] = 0
 
-        for f_n in range(frame_count):
-            # compare each frame to the reference frame
-            frame = video[f_n]
-            frame[mask == False] = 0  # set all pixels outside the mask to zero
-            # plt.imsave("debug/%04d.png" % f_n, frame)
-            frame_portions = get_portions(frame, cx, cy)  # split the frame into the quadrants
-            diff = [0, 0, 0, 0]  # to hold the difference values for each quadrant
-            for i in range(4):  # loop through each quadrant
-                diff[i] = get_diff(frame_portions[i], ref_frame_portions[i])  # record the difference value
-            # determine an integer for the quadrant with the highest difference
+        for f_n in range(start_f, end_f):  # for each frame
             highest = 0
-            high_val = diff[0]
-            for i in range(1, 4):
-                if diff[i] > diff[highest]:
-                    highest = i
-                    high_val = diff[i]
+            high_quad = ''
+            for name, mask in masks.items():  # for each mask
+                # compare the current frame to the current mask
+                frame = np.array(video[f_n])
+                frame[mask == 0] = 0  # set all pixels outside the mask to zero
+                d = get_diff(frame, mask)
 
-            most_movement[f_n] = [highest, high_val]
+                if d > highest:
+                    highest = d
+                    high_quad = name
+
+            # save the high value and the
+            quad_results[f_n] = [highest, high_quad]
         printnow("done.")
 
         # todo refine the quadrant movement - when the mouse is behind the fan there is a baseline amount of movement where the most recent quadrant should stay flagged
 
         # reconstruct the video in colour with the highest movement area highlighted
         printnow("\tMaking debug video and saving... ", end='')
-        for f_n in range(frame_count):
+        quad_counter = [0, 0, 0, 0]  # number of frames spent in each quadrant
+        red = 2  # the index of the red colour
+        for f_n in range(start_f, end_f):
+            # todo convert the matrix to uint16, add 50, then convert back to uint8 (all >255 values should become 255)
             # turn the quadrant red
-            if most_movement[f_n][0] == 0:  # UL
-                video_c[f_n, 0:cx, 0:cy, 0] += 50
-            elif most_movement[f_n][0] == 1:  # UR
-                video_c[f_n, 0:cx, cy:, 0] += 50
-            elif most_movement[f_n][0] == 2: # BL
-                video_c[f_n, cx:, 0:cy, 0] += 50
-            elif most_movement[f_n][0] == 3: # BR
-                video_c[f_n, cx:, cy:, 0] += 50
+            key = 0
+            if quad_results[f_n][1] == mask_names[0]:  # top
+                key = 0
+            elif quad_results[f_n][1] == mask_names[1]:  # right
+                key = 1
+            elif quad_results[f_n][1] == mask_names[2]:  # bottom
+                key = 2
+            elif quad_results[f_n][1] == mask_names[3]:  # left
+                key = 3
+
+            vid_cpy = np.array(video_c[f_n]).astype(dtype=np.uint16)  # get a colour copy of the current frame
+            vid_cpy[masks[mask_names[key]] == 255, red] += 50  # add 50 to the intensity of red
+            vid_cpy[vid_cpy[:, :, red] > 255, red] = 255  # reduce any red values > 255 to 255
+            video_c[f_n] = vid_cpy.astype(dtype=np.uint8)  # copy back into video array
+
+            quad_counter[key] += 1  # increment quadrant counter
 
         # convert video_c back into a video
-        imageio.mimwrite("done-" + filenames[file_num], video_c, format="FFMPEG", fps=fps)
+        # imageio.mimwrite("done-" + filenames[file_num], video_c, format="FFMPEG", fps=fps)
+        writer = cv2.VideoWriter("done-" + filenames[file_num], cv2.VideoWriter_fourcc(*'PIM1'), fps, (frame_width, frame_height), True)
+        for v_f in range(video_c.shape[0]):  # for each frame in video_c
+            writer.write(video_c[v_f])
         printnow("done.")
 
-        # todo generate and print results for time spent in each quadrant
+        for n_i in range(4):
+            print("%s=%d" % (mask_names[n_i], quad_counter[n_i]), end=" ")
+        print()
+        for n_i in range(4):
+            print("%s=%.2f%%" % (mask_names[n_i], (quad_counter[n_i]/len(quad_results))*100), end=" ")
+        print()
+        for n_i in range(4):
+            print("%s=%.2fs" % (mask_names[n_i], quad_counter[n_i]/fps), end=" ")
+        print()
 
-        #
-        # # todo covert to black and white based on a threshold
-        #
-        # # disp("\tGenerating difference between frames... ", end='')
-        # # video_diff = np.diff(video_grey, axis=0)
-        # # disp("done.")
         #
         # # todo find the biggest black blob inside the mask
         #
