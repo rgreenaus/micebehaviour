@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import imageio
+import os
 
 # frame 944 of the first video has a nice shot of the mouse
 
@@ -43,6 +44,7 @@ def printnow(str, end="\n"):
     print(str, end=end)
     sys.stdout.flush()
 
+
 def get_diff(arr1, arr2):
     """
     returns the sum of the absolute differences between all values
@@ -51,12 +53,54 @@ def get_diff(arr1, arr2):
     return np.sum(np.abs(arr1 - arr2))
 
 
+def get_filenames(root_dir):
+    """
+    returns the list of files to analyse
+    :param root_dir: the path to the root directory of the folders that contains the videos
+    :return: the list of file paths for analysis
+    """
+
+    rtn_list = []
+    for subdir, dirs, files in os.walk(root_dir):
+        for file in files:
+            filepath = os.path.join(subdir, file)
+            # is it a mpg file with associated txt file?
+            if filepath.endswith(".mpg") and os.path.isfile(filepath[:-4] + ".txt" ):
+                # add this filepath to the return list
+                rtn_list.append(filepath)
+
+    return rtn_list
+
+
 def main():
 
     # video filepaths
-    root_dir = "videos/"
+    csv_out = "filename,top_secs,right_secs,bottom_secs,left_secs,start_time,end_time,duration\n"  # string to store csv output
+    root_dir = "/docs/Dropbox/197, 200, 201, 203, 209 and txt files/"
+    out_dir = root_dir
     mask_dir = "masks/"
-    filenames = ["CM 193F Day3 T6.mpg"] # "CM 192F Day3 T4.mpg",
+    filenames = get_filenames(root_dir)
+    #     [ #"Probe 1 for software analysis/210F Probe1.mpg",
+    # #             "Probe 1 for software analysis/212M probe1.mpg",
+    # #             "Probe 1 for software analysis/213M Probe1.mpg",
+    # #             "Probe 1 for software analysis/218M Probe 1.mpg",
+    # #             "Probe 1 for software analysis/219F Probe 1.mpg",
+    # #             "Probe 1 for software analysis/224F Probe 1.mpg",
+    # #             "Probe 1 for software analysis/225M Probe 1.mpg",
+    #             "Probe 1 for software analysis/CM 197M  Probe1.mpg",
+    #             "Probe 1 for software analysis/CM 200F Probe 1.mpg",
+    #             "Probe 1 for software analysis/CM 201F Probe1.mpg",
+    #             "Probe 1 for software analysis/CM 203F Probe1.mpg",
+    #             "Probe 1 for software analysis/CM 209M Probe1.mpg",
+    #             "Probe 2 for software analysis/218M Probe 2.mpg",
+    #             "Probe 2 for software analysis/219F Probe 2.mpg",
+    #             "Probe 2 for software analysis/224F Probe 2.mpg",
+    #             "Probe 2 for software analysis/225M Probe 2.mpg",
+    #             "Probe 2 for software analysis/CM 197M Probe 2.mpg",
+    #             "Probe 2 for software analysis/CM 200F Probe2.mpg",
+    #             "Probe 2 for software analysis/CM 201F Probe 2.mpg",
+    #             "Probe 2 for software analysis/CM 203F Probe 2.mpg",
+    #             "Probe 2 for software analysis/CM 209M Probe 2.mpg"]
     ref_frame_nums = [510]  # 834, # a frame from the video that all other frames can be compared to
     threshold = 100
     mask_fn = "mask.png"  # filenames of the mask files
@@ -79,6 +123,7 @@ def main():
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = int(cap.get(cv2.CAP_PROP_FPS))
 
+        # todo only load the frames from start time to end time
         video = np.empty((frame_count, frame_height, frame_width), np.dtype('uint8'))
         video_c = np.empty((frame_count, frame_height, frame_width, 3), np.dtype('uint8'))
 
@@ -95,17 +140,21 @@ def main():
 
         cap.release()
 
-        # load the start and end times
-        txt_fn = root_dir + filenames[file_num]
-        txt_fn = txt_fn[:-3] + 'txt'
-        txt_h = open(txt_fn, "r")
-        txt = txt_h.readline()
-        txt_h.close()
-        txt = txt.split(',')
-        start_t = int(txt[0].rstrip())
-        end_t = int(txt[1].rstrip())
-        start_f = start_t * fps
-        end_f = end_t * fps
+        try:
+            # load the start and end times
+            txt_fn = root_dir + filenames[file_num]
+            txt_fn = txt_fn[:-3] + 'txt'
+            txt_h = open(txt_fn, "r")
+            txt = txt_h.readline()
+            txt_h.close()
+            txt = txt.split(',')
+            start_t = int(txt[0].rstrip())
+            end_t = int(txt[1].rstrip())
+            start_f = start_t * fps
+            end_f = end_t * fps
+        except:
+            printnow("text file not found")
+            continue
 
         # convert the uint8 data to True/False
         mask = np.array(imageio.imread(mask_dir + mask_fn)) == 255
@@ -122,20 +171,27 @@ def main():
         # # plt.imsave("debug/ref_frame.png", ref_frame) # save for reference
         # ref_frame_portions = get_portions(ref_frame, cx, cy)  # divide into portions
 
+        printnow("\tProcessing video... ", end='')
         quad_results = {}  # is a dict to hold entries in the frame_num:most_moved_quadrant format
 
         # threshold the video
         video[video > threshold] = 255
         video[video <= threshold] = 0
 
+        debug_arr = np.zeros((end_f - start_f, 4))  # stores all diff results in frame#, quad format
+
         for f_n in range(start_f, end_f):  # for each frame
             highest = 0
             high_quad = ''
+            debug_count = 0
             for name, mask in masks.items():  # for each mask
                 # compare the current frame to the current mask
                 frame = np.array(video[f_n])
                 frame[mask == 0] = 0  # set all pixels outside the mask to zero
                 d = get_diff(frame, mask)
+
+                debug_arr[f_n - start_f, debug_count] = d
+                debug_count += 1
 
                 if d > highest:
                     highest = d
@@ -143,6 +199,15 @@ def main():
 
             # save the high value and the
             quad_results[f_n] = [highest, high_quad]
+            
+        # using the debug data we'll remove the min from each quadrant to put them on a level footing
+        debug_arr[:, 0] = debug_arr[:, 0] - np.min(debug_arr[:, 0])
+        debug_arr[:, 1] = debug_arr[:, 1] - np.min(debug_arr[:, 1])
+        debug_arr[:, 2] = debug_arr[:, 2] - np.min(debug_arr[:, 2])
+        debug_arr[:, 3] = debug_arr[:, 3] - np.min(debug_arr[:, 3])
+        for f_n in range(0, end_f - start_f):  # for each frame
+            quad_results[f_n + start_f] = [np.max(debug_arr[f_n]), mask_names[np.argmax(debug_arr[f_n])]]
+            
         printnow("done.")
 
         # todo refine the quadrant movement - when the mouse is behind the fan there is a baseline amount of movement where the most recent quadrant should stay flagged
@@ -173,11 +238,12 @@ def main():
 
         # convert video_c back into a video
         # imageio.mimwrite("done-" + filenames[file_num], video_c, format="FFMPEG", fps=fps)
-        writer = cv2.VideoWriter("done-" + filenames[file_num], cv2.VideoWriter_fourcc(*'PIM1'), fps, (frame_width, frame_height), True)
+        writer = cv2.VideoWriter(out_dir + filenames[file_num][:-4] + "_debug" + filenames[file_num][-4:], cv2.VideoWriter_fourcc(*'PIM1'), fps, (frame_width, frame_height), True)
         for v_f in range(video_c.shape[0]):  # for each frame in video_c
             writer.write(video_c[v_f])
         printnow("done.")
 
+        printnow("start time: %ds end time: %ds" % (start_t, end_t))
         for n_i in range(4):
             print("%s=%d" % (mask_names[n_i], quad_counter[n_i]), end=" ")
         print()
@@ -186,7 +252,23 @@ def main():
         print()
         for n_i in range(4):
             print("%s=%.2fs" % (mask_names[n_i], quad_counter[n_i]/fps), end=" ")
-        print()
+        print('\n')
+
+        csv_line = "%s,%.2f,%.2f,%.2f,%.2f,%d,%d,%d\n" % (filenames[file_num][:-4],
+                                                          quad_counter[0] / fps,
+                                                          quad_counter[1] / fps,
+                                                          quad_counter[2] / fps,
+                                                          quad_counter[3] / fps,
+                                                          start_t,
+                                                          end_t,
+                                                          end_t - start_t)
+        csv_out += csv_line
+        csv_line_file = open(out_dir + filenames[file_num][:-3] + "csv", "w")
+        csv_line_file.write(csv_line)
+        csv_line_file.close()
+
+        del video_c
+        del video
 
         #
         # # todo find the biggest black blob inside the mask
@@ -210,6 +292,12 @@ def main():
         #     plt.show()
         #
         # # todo maybe difference isn't needed - just black&white it then look for the biggest black blob outside the masked area
+
+    # save csv out
+    csv_file = open(out_dir + "output.csv", "w")
+    csv_file.write(csv_out)
+    csv_file.close()
+    printnow("\n\n" + csv_out)
 
 
 if __name__ == '__main__':
