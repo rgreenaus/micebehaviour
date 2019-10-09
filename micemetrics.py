@@ -40,8 +40,8 @@ def imview(arr):
     plt.show()
 
 
-def printnow(str, end="\n"):
-    print(str, end=end)
+def printnow(s, end="\n"):
+    print(s, end=end)
     sys.stdout.flush()
 
 
@@ -53,10 +53,12 @@ def get_diff(arr1, arr2):
     return np.sum(np.abs(arr1 - arr2))
 
 
-def get_filenames(root_dir):
+def get_filenames(root_dir, out_dir, csv_out=None):
     """
     returns the list of files to analyse
     :param root_dir: the path to the root directory of the folders that contains the videos
+    :param out_dir: the directory the output is written to
+    :param csv_out: if passed a string this function will not return files that already have csvs and will instead read them into the csv_out string
     :return: the list of file paths for analysis
     """
 
@@ -65,9 +67,17 @@ def get_filenames(root_dir):
         for file in files:
             filepath = os.path.join(subdir, file)
             # is it a mpg file with associated txt file?
-            if filepath.endswith(".mpg") and os.path.isfile(filepath[:-4] + ".txt" ):
-                # add this filepath to the return list
-                rtn_list.append(filepath)
+            if filepath.endswith(".mpg") and os.path.isfile(filepath[:-4] + ".txt"):
+                csv_file_path = os.path.join(out_dir, subdir[len(root_dir):], file[:-4] + ".csv")
+                if csv_out and os.path.isfile(csv_file_path):  # if we don't want to overwrite existing csv files
+                    with open(csv_file_path, "r") as csv_in:
+                        csv_out += csv_in.readline()
+                else:
+                    # get the start and stop times from the text file
+                    # add this filepath to the return list along with the start and stop time read from its associated text file
+                    with open(filepath[:-4] + ".txt", "r") as text_file_h:
+                        start_t, end_t = text_file_h.readline().split(',')
+                        rtn_list.append((filepath, int(start_t), int(end_t)))
 
     return rtn_list
 
@@ -76,31 +86,10 @@ def main():
 
     # video filepaths
     csv_out = "filename,top_secs,right_secs,bottom_secs,left_secs,start_time,end_time,duration\n"  # string to store csv output
-    root_dir = "/docs/Dropbox/197, 200, 201, 203, 209 and txt files/"
-    out_dir = root_dir
+    root_dir = "/docs/Dropbox/Small cues probe 1 for software analysis/" #"/docs/Dropbox/210, 212, 213 and txt files/Probe 2/"
+    out_dir = "/docs/Dropbox/Small cues probe 1 for software analysis/" #"/docs/Dropbox/210, 212, 213 and txt files/Probe 2/"
     mask_dir = "masks/"
-    filenames = get_filenames(root_dir)
-    #     [ #"Probe 1 for software analysis/210F Probe1.mpg",
-    # #             "Probe 1 for software analysis/212M probe1.mpg",
-    # #             "Probe 1 for software analysis/213M Probe1.mpg",
-    # #             "Probe 1 for software analysis/218M Probe 1.mpg",
-    # #             "Probe 1 for software analysis/219F Probe 1.mpg",
-    # #             "Probe 1 for software analysis/224F Probe 1.mpg",
-    # #             "Probe 1 for software analysis/225M Probe 1.mpg",
-    #             "Probe 1 for software analysis/CM 197M  Probe1.mpg",
-    #             "Probe 1 for software analysis/CM 200F Probe 1.mpg",
-    #             "Probe 1 for software analysis/CM 201F Probe1.mpg",
-    #             "Probe 1 for software analysis/CM 203F Probe1.mpg",
-    #             "Probe 1 for software analysis/CM 209M Probe1.mpg",
-    #             "Probe 2 for software analysis/218M Probe 2.mpg",
-    #             "Probe 2 for software analysis/219F Probe 2.mpg",
-    #             "Probe 2 for software analysis/224F Probe 2.mpg",
-    #             "Probe 2 for software analysis/225M Probe 2.mpg",
-    #             "Probe 2 for software analysis/CM 197M Probe 2.mpg",
-    #             "Probe 2 for software analysis/CM 200F Probe2.mpg",
-    #             "Probe 2 for software analysis/CM 201F Probe 2.mpg",
-    #             "Probe 2 for software analysis/CM 203F Probe 2.mpg",
-    #             "Probe 2 for software analysis/CM 209M Probe 2.mpg"]
+    filenames = get_filenames(root_dir, out_dir, csv_out=csv_out)
     ref_frame_nums = [510]  # 834, # a frame from the video that all other frames can be compared to
     threshold = 100
     mask_fn = "mask.png"  # filenames of the mask files
@@ -112,18 +101,26 @@ def main():
         masks[mask_names[fn]] = np.array(imageio.imread(mask_dir + section_mask_fns[fn]))
 
     # loop through each video
-    for file_num in range(len(filenames)):
-        printnow("Processing " + filenames[file_num])
+    count = 1
+    for file_path, start_t, end_t in filenames:
+        file_name = file_path[len(root_dir):]
+        printnow(f"Processing Video ({count}/{len(filenames)}) {file_name}")
+        count += 1
 
         # load the video file
         printnow("\tLoading and converting to greyscale... ", end='')
-        cap = cv2.VideoCapture(root_dir + filenames[file_num])
+        cap = cv2.VideoCapture(file_path)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = int(cap.get(cv2.CAP_PROP_FPS))
 
-        # todo only load the frames from start time to end time
+        # get the starting and ending frame numbers
+        start_f = start_t * fps
+        end_f = end_t * fps
+        frame_count = end_f - start_f
+
+        # only load the frames from start frame to end frame
         video = np.empty((frame_count, frame_height, frame_width), np.dtype('uint8'))
         video_c = np.empty((frame_count, frame_height, frame_width, 3), np.dtype('uint8'))
 
@@ -132,44 +129,21 @@ def main():
             ret, tmp = cap.read()
             if not ret:
                 break
-            # build the coloured video matrix
-            video_c[fc] = tmp
-            # convert each frame to greyscale
-            video[fc] = np.dot(tmp[..., :3], [0.299, 0.587, 0.114])
-            fc += 1
+            if fc < (start_f-1):  # if we haven't hit the starting frame yet
+                fc += 1
+                continue  # move to the next frame
+            elif fc >= end_f:
+                break  # we've reached the end of the window
+            else:
+                # build the coloured video matrix
+                video_c[fc - start_f] = tmp
+                # convert each frame to greyscale
+                video[fc - start_f] = np.dot(tmp[..., :3], [0.299, 0.587, 0.114])
+                fc += 1
 
         cap.release()
 
-        try:
-            # load the start and end times
-            txt_fn = root_dir + filenames[file_num]
-            txt_fn = txt_fn[:-3] + 'txt'
-            txt_h = open(txt_fn, "r")
-            txt = txt_h.readline()
-            txt_h.close()
-            txt = txt.split(',')
-            start_t = int(txt[0].rstrip())
-            end_t = int(txt[1].rstrip())
-            start_f = start_t * fps
-            end_f = end_t * fps
-        except:
-            printnow("text file not found")
-            continue
-
-        # convert the uint8 data to True/False
-        mask = np.array(imageio.imread(mask_dir + mask_fn)) == 255
-
         printnow("done.")
-
-        # # Do the processing
-        # printnow("\tDetermining difference regions... ", end='')
-        # # build the reference frame
-        # ref_frame = video[ref_frame_nums[file_num]]
-        # ref_frame[mask == False] = 0  # set all the surrounding to zero
-        # ref_frame[ref_frame > threshold] = 255  # set all pixels above the threshold to white
-        # ref_frame[ref_frame <= threshold] = 0  # set all pixels below the threshold to black
-        # # plt.imsave("debug/ref_frame.png", ref_frame) # save for reference
-        # ref_frame_portions = get_portions(ref_frame, cx, cy)  # divide into portions
 
         printnow("\tProcessing video... ", end='')
         quad_results = {}  # is a dict to hold entries in the frame_num:most_moved_quadrant format
@@ -178,9 +152,9 @@ def main():
         video[video > threshold] = 255
         video[video <= threshold] = 0
 
-        debug_arr = np.zeros((end_f - start_f, 4))  # stores all diff results in frame#, quad format
+        debug_arr = np.zeros((frame_count, 4))  # stores all diff results in frame#, quad format
 
-        for f_n in range(start_f, end_f):  # for each frame
+        for f_n in range(frame_count):  # for each frame
             highest = 0
             high_quad = ''
             debug_count = 0
@@ -190,7 +164,7 @@ def main():
                 frame[mask == 0] = 0  # set all pixels outside the mask to zero
                 d = get_diff(frame, mask)
 
-                debug_arr[f_n - start_f, debug_count] = d
+                debug_arr[f_n, debug_count] = d
                 debug_count += 1
 
                 if d > highest:
@@ -199,14 +173,14 @@ def main():
 
             # save the high value and the
             quad_results[f_n] = [highest, high_quad]
-            
+
         # using the debug data we'll remove the min from each quadrant to put them on a level footing
         debug_arr[:, 0] = debug_arr[:, 0] - np.min(debug_arr[:, 0])
         debug_arr[:, 1] = debug_arr[:, 1] - np.min(debug_arr[:, 1])
         debug_arr[:, 2] = debug_arr[:, 2] - np.min(debug_arr[:, 2])
         debug_arr[:, 3] = debug_arr[:, 3] - np.min(debug_arr[:, 3])
         for f_n in range(0, end_f - start_f):  # for each frame
-            quad_results[f_n + start_f] = [np.max(debug_arr[f_n]), mask_names[np.argmax(debug_arr[f_n])]]
+            quad_results[f_n] = [np.max(debug_arr[f_n]), mask_names[np.argmax(debug_arr[f_n])]]
             
         printnow("done.")
 
@@ -216,7 +190,7 @@ def main():
         printnow("\tMaking debug video and saving... ", end='')
         quad_counter = [0, 0, 0, 0]  # number of frames spent in each quadrant
         red = 2  # the index of the red colour
-        for f_n in range(start_f, end_f):
+        for f_n in range(frame_count):
             # todo convert the matrix to uint16, add 50, then convert back to uint8 (all >255 values should become 255)
             # turn the quadrant red
             key = 0
@@ -237,13 +211,17 @@ def main():
             quad_counter[key] += 1  # increment quadrant counter
 
         # convert video_c back into a video
-        # imageio.mimwrite("done-" + filenames[file_num], video_c, format="FFMPEG", fps=fps)
-        writer = cv2.VideoWriter(out_dir + filenames[file_num][:-4] + "_debug" + filenames[file_num][-4:], cv2.VideoWriter_fourcc(*'PIM1'), fps, (frame_width, frame_height), True)
+        out_file_path = out_dir + file_name[:-4] + "_debug" + file_path[-4:]
+        out_file_dirs = out_file_path[:out_file_path.rfind('/')]
+        if not os.path.exists(out_file_dirs):
+            os.makedirs(out_file_dirs)
+        writer = cv2.VideoWriter(out_file_path, cv2.VideoWriter_fourcc(*'PIM1'), fps, (frame_width, frame_height), True)
         for v_f in range(video_c.shape[0]):  # for each frame in video_c
             writer.write(video_c[v_f])
+        writer.release()
         printnow("done.")
 
-        printnow("start time: %ds end time: %ds" % (start_t, end_t))
+        printnow(f"start time: {start_t}s end time: {end_t}s")
         for n_i in range(4):
             print("%s=%d" % (mask_names[n_i], quad_counter[n_i]), end=" ")
         print()
@@ -254,7 +232,7 @@ def main():
             print("%s=%.2fs" % (mask_names[n_i], quad_counter[n_i]/fps), end=" ")
         print('\n')
 
-        csv_line = "%s,%.2f,%.2f,%.2f,%.2f,%d,%d,%d\n" % (filenames[file_num][:-4],
+        csv_line = "%s,%.2f,%.2f,%.2f,%.2f,%d,%d,%d\n" % (file_name[file_name.rfind('/')+1:-4],
                                                           quad_counter[0] / fps,
                                                           quad_counter[1] / fps,
                                                           quad_counter[2] / fps,
@@ -263,35 +241,12 @@ def main():
                                                           end_t,
                                                           end_t - start_t)
         csv_out += csv_line
-        csv_line_file = open(out_dir + filenames[file_num][:-3] + "csv", "w")
+        csv_line_file = open(out_dir + file_name[:-3] + "csv", "w")
         csv_line_file.write(csv_line)
         csv_line_file.close()
 
         del video_c
         del video
-
-        #
-        # # todo find the biggest black blob inside the mask
-        #
-        # pass
-        #
-        # # todo this stuff
-        # # threshold 128 is good, maybe 124 is a little better
-        # # find the largest blob of a certain value
-        # # https://stackoverflow.com/questions/20110232/python-efficient-way-to-find-the-largest-area-of-a-specific-value-in-a-2d-nump
-        # # then compute the centroid
-        # threshold = 128
-        # video_bw = np.zeros(video_grey.shape, dtype=np.bool)
-        # video_bw[np.where(video_grey > threshold)] = True
-        #
-        # for i in range(100):
-        #     video_bw = np.zeros((video_grey.shape[1], video_grey.shape[2]), dtype=np.bool)
-        #     video_bw[np.where(video_grey[994] > (100 + i))] = True
-        #     plt.imshow(video_bw)
-        #     plt.title(str(i))
-        #     plt.show()
-        #
-        # # todo maybe difference isn't needed - just black&white it then look for the biggest black blob outside the masked area
 
     # save csv out
     csv_file = open(out_dir + "output.csv", "w")
